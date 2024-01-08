@@ -1,0 +1,342 @@
+import 'dart:async';
+import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:guataplanapp/models/salas_model.dart';
+import 'package:guataplanapp/screens/home.dart';
+import 'package:guataplanapp/theme/imports.dart';
+import '../screens/chat/chat2.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+
+
+
+
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+
+
+//Manejas notificaciones
+Future<void> notificacionesInicializacion() async {
+
+  //Permisos
+  await solicitarPermisos();
+
+  //Iniciar android
+  iniciarAndroid();
+
+
+  //Actualizar token
+  await actualizarToken();
+
+  //Eliminacion de notificaciones
+  await FlutterLocalNotificationsPlugin().cancelAll();
+
+  //Inicializacion
+  await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+    alert: true,
+    badge: true,
+    sound: true,
+  );
+
+
+  try {
+
+    //CLICADA
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+
+      print('NOTIFICACION CLICKADA');
+
+      SalasModel salasModel = SalasModel(
+          id: message.data["salaid"],
+          group: bool.parse(message.data["group"]),
+          title: message.data["salatitle"],
+          image: message.data["salaimage"]
+
+      );
+
+      goToClear(CONTEXT, HomePage());
+
+      goTo(CONTEXT, ChatPage(grupo: bool.parse(message.data["group"]), salasModel: salasModel));
+
+
+    });
+
+    //BACKGROUND SECUNDARIA
+    await FirebaseMessaging.instance.getInitialMessage().then((message) {
+
+        if (message != null) {
+
+          if(!NOTIABIERTA){
+
+            print('NOTIFICACION | CERRADO');
+
+            goToClear(CONTEXT, HomePage());
+
+            SalasModel salasModel = SalasModel(
+                id: message.data["salaid"],
+                group: bool.parse(message.data["group"]),
+                title: message.data["salatitle"],
+                image: message.data["salaimage"]
+
+            );
+
+            goTo(CONTEXT, ChatPage(grupo: bool.parse(message.data["group"]), salasModel: salasModel));
+
+            NOTIABIERTA = true;
+          }
+
+
+
+        }
+
+
+      });
+
+    //BACKGROUND
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+    //PRIMER PLANO
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+
+      print('NOTIFICACION | PRIMER PLANO');
+
+      //Revisar notificaciones
+      if(message.data["fromuser"] == USUARIO.id || message.data['salaid'] == ID_SALA_RECHAZO_NOTIFICACIONES){
+
+        print("Rechazamos notificacion");
+
+        await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+          alert: false,
+          badge: false,
+          sound: false,
+        );
+
+      }else{
+
+        print("Aceptamos notificacion");
+
+        await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+          alert: true,
+          badge: true,
+          sound: true,);
+
+        mostrarNotificacion(message);
+
+
+      }
+
+    });
+
+
+  } catch (error) {
+
+    print(error);
+
+  }
+
+}
+
+iniciarAndroid() async {
+
+  AndroidNotificationChannel androidNotificationChannel = AndroidNotificationChannel(
+    'high_importance_channel',
+    'High Importance Notifications',
+    description: 'This channel is used for important notifications.',
+    importance: Importance.high,
+  );
+
+  FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+  FlutterLocalNotificationsPlugin();
+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+      AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(androidNotificationChannel);
+
+
+  await flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.createNotificationChannel(androidNotificationChannel);
+
+  //Inicializamos
+  await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+    alert: true,
+    badge: true,
+    sound: true,
+  );
+
+}
+
+solicitarPermisos() async {
+
+  //Solicitar permisos
+  await FirebaseMessaging.instance.requestPermission(
+    alert: true,
+    announcement: false,
+    badge: true,
+    carPlay: false,
+    criticalAlert: false,
+    provisional: false,
+    sound: true,
+  );
+
+}
+
+actualizarToken() async {
+
+  //Actualizacion de token
+  try {
+
+    String? token = "";
+
+    if (!kIsWeb) {
+
+      if (Platform.isIOS) {
+
+        await FirebaseMessaging.instance.getAPNSToken();
+        token = await FirebaseMessaging.instance.getToken();
+        await FirebaseMessaging.instance.subscribeToTopic("all");
+
+      }else{
+
+        token = await FirebaseMessaging.instance.getToken();
+        await FirebaseMessaging.instance.subscribeToTopic("all");
+
+      }
+
+      if(USUARIO.token != token){
+
+        FirebaseFirestore
+            .instance
+            .collection("Users")
+            .doc(USUARIO.id)
+            .update({"token": token});
+
+      }
+    }
+
+  } catch (error) {
+
+    print(error);
+
+  }
+}
+
+mostrarNotificacion(RemoteMessage message, {BuildContext? context, bool background = false}) async {
+
+
+  const AndroidInitializationSettings initializationSettingsAndroid = AndroidInitializationSettings('@mipmap/ic_stat_notification');
+  final DarwinInitializationSettings initializationSettingsDarwin = DarwinInitializationSettings(
+    requestSoundPermission: true,
+    requestBadgePermission: true,
+    requestAlertPermission: true,
+    //onDidReceiveLocalNotification: onDidReceiveLocalNotification,
+  );
+
+
+  final InitializationSettings initializationSettings = InitializationSettings(
+      android: initializationSettingsAndroid,
+      iOS: initializationSettingsDarwin
+  );
+
+
+
+
+
+  //MESSAGE
+  RemoteNotification? notification = message.notification;
+
+  AndroidNotificationChannel channel = AndroidNotificationChannel(
+    'high_importance_channel',
+    'High Importance Notifications',
+    description: 'This channel is used for important notifications.',
+    importance: Importance.high,
+  );
+
+  if (notification != null) {
+
+    flutterLocalNotificationsPlugin.show(
+      notification.hashCode,
+      notification.title,
+      notification.body,
+      payload: notification.android!.clickAction ?? "",
+
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          channel.id,
+          channel.name,
+          channelDescription: channel.description,
+          icon: '@mipmap/ic_stat_notification',
+          color: COLOR_ACCENT,
+        ),
+
+      ),
+    );
+
+
+
+    await flutterLocalNotificationsPlugin.initialize(
+      initializationSettings,
+      onDidReceiveNotificationResponse: (NotificationResponse notificationResponse) async {
+
+        SalasModel salasModel = SalasModel(
+            id: message.data["salaid"],
+            group: bool.parse(message.data["group"]),
+            title: message.data["salatitle"],
+            image: message.data["salaimage"]
+
+        );
+
+        goTo(CONTEXT, ChatPage(grupo: bool.parse(message.data["group"]), salasModel: salasModel));
+
+      },
+
+    );
+
+
+
+  }
+
+
+
+
+
+}
+
+
+
+
+
+
+
+
+
+
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+
+  print('NOTIFICACION | BACKGROUND');
+  mostrarNotificacion(message, background: true);
+
+}
+
+
+//MOSTRAR NOTIFICACIONES
+
+
+//TOPICS
+suscribeToTopic(String id) async {
+  FirebaseMessaging messaging = FirebaseMessaging.instance;
+  await messaging.subscribeToTopic(id);
+}
+
+unsuscribeToTopic(String id) async {
+  FirebaseMessaging messaging = FirebaseMessaging.instance;
+  await messaging.unsubscribeFromTopic(id);
+}
+
+
+
+
+
+
